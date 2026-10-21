@@ -425,9 +425,13 @@ class Extension {
         svg.setAttribute('aria-hidden', 'true');
         svg.classList.add('projects-container__icon');
         const path = document.createElementNS(ns, 'path');
-        path.setAttribute('d', kind === 'chevron'
-            ? 'm9 18 6-6-6-6'
-            : 'M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z');
+        const paths = {
+            chevron: 'm9 18 6-6-6-6',
+            folder: 'M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z',
+            // A document outline distinguishes leaf Projects from folders.
+            project: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h6'
+        };
+        path.setAttribute('d', paths[kind] || paths.folder);
         svg.append(path);
         return svg;
     }
@@ -446,16 +450,11 @@ class Extension {
                 container.setAttribute('data-chatgpt-folders', 'true');
                 container.setAttribute('aria-label', '项目目录');
             }
-
-            if (
-                container.parentNode !== mount.parent ||
-                (mount.before && container.nextSibling !== mount.before)
-            ) {
+            if (container.parentNode !== mount.parent ||
+                (mount.before && container.nextSibling !== mount.before)) {
                 mount.parent.insertBefore(container, mount.before);
             }
-            // Measure the native "项目" heading on the current sidebar and
-            // align "项目目录" to that exact x-coordinate. This avoids a
-            // hard-coded offset that differs across ChatGPT versions.
+
             if (mount.nativeLabel) {
                 const nativeLeft = mount.nativeLabel.getBoundingClientRect().left;
                 const sectionLeft = container.getBoundingClientRect().left;
@@ -472,7 +471,6 @@ class Extension {
             const title = document.createElement('span');
             title.className = 'projects-container__category-title';
             title.textContent = '项目目录';
-            // Native title typography can vary across ChatGPT versions.
             if (mount.nativeLabel) {
                 const nativeStyle = getComputedStyle(mount.nativeLabel);
                 title.style.fontSize = nativeStyle.fontSize;
@@ -482,82 +480,121 @@ class Extension {
             titleButton.append(title);
             const categoryChevron = this.makeIcon('chevron');
             categoryChevron.classList.add('projects-container__category-chevron');
-            if (this.folderSectionExpanded) categoryChevron.classList.add('projects-container__chevron--expanded');
+            if (this.folderSectionExpanded) {
+                categoryChevron.classList.add('projects-container__chevron--expanded');
+            }
             titleButton.append(categoryChevron);
             titleButton.addEventListener('click', () => {
                 this.folderSectionExpanded = !this.folderSectionExpanded;
                 this.injectProjects();
             });
+            // Dropping on the section header moves a folder to the root.
+            this.bindDropTarget(titleButton, '');
 
             const list = document.createElement('ul');
             list.className = 'projects-container__list';
             list.setAttribute('role', 'tree');
             list.hidden = !this.folderSectionExpanded;
-
-            const headings = [];
-            let hiddenAncestor = false;
+            const ancestors = [];
             for (const project of this.projects) {
                 const level = Math.max(0, Number(project.level) || 0);
-                // This category only lists grouped Projects. Plain Projects
-                // remain accessible in ChatGPT's original "项目" category.
-                if (project.type === 'project' && level === 0) continue;
-                if (project.type !== 'project' && project.type !== 'heading') continue;
-
-                if (project.type === 'heading') {
-                    headings.length = level;
-                    headings[level] = project.name;
-                }
-                hiddenAncestor = headings.slice(0, level).some((_, depth) =>
-                    this.collapsedFolders.has(headings.slice(0, depth + 1).join(' / '))
-                );
-                if (hiddenAncestor) continue;
+                const path = project.path || [...ancestors.slice(0, level), project.name].join(' - ');
+                const folder = !!project.isFolder;
+                ancestors.length = level;
+                ancestors[level] = path;
+                const ancestorPaths = ancestors.slice(0, level);
+                if (ancestorPaths.some(p => this.collapsedFolders.has(p))) continue;
 
                 const item = document.createElement('li');
                 item.className = 'projects-container__list-item';
                 item.style.setProperty('--folder-depth', String(level));
                 item.setAttribute('role', 'treeitem');
                 item.setAttribute('aria-level', String(level + 1));
-                if (project.id != null) item.setAttribute('data-id', project.id);
+                if (project.id) item.setAttribute('data-id', project.id);
                 if (project.done) item.classList.add('projects-container__list-item--done');
+                if (folder && project.id) item.classList.add('projects-container__list-item--hybrid');
 
-                const isHeading = project.type === 'heading';
-                let chevron = null;
-                const entry = document.createElement(isHeading ? 'button' : 'a');
+                const row = document.createElement('div');
+                row.className = 'projects-container__row';
+                row.style.setProperty('--folder-depth', String(level));
+                const isProject = project.type === 'project' && !!project.url;
+                const entry = document.createElement(isProject ? 'a' : 'button');
                 entry.className = 'projects-container__list-link';
                 entry.title = project.name;
-                if (isHeading) {
+                if (isProject) {
+                    entry.href = project.url;
+                    // Clicking a hybrid node expands it AND navigates to
+                    // the actual ChatGPT Project. The trailing chevron only
+                    // toggles expansion without navigation.
+                    if (folder) {
+                        entry.addEventListener('click', event => {
+                            if (event.button !== 0 || event.metaKey || event.ctrlKey ||
+                                event.altKey || event.shiftKey) return;
+                            event.preventDefault();
+                            this.collapsedFolders.delete(path);
+                            this.saveCollapsedState();
+                            window.location.assign(project.url);
+                        });
+                    }
+                } else {
                     entry.type = 'button';
-                    const folderPath = headings.slice(0, level + 1).join(' / ');
-                    const collapsed = this.collapsedFolders.has(folderPath);
-                    entry.setAttribute('aria-expanded', String(!collapsed));
-                    chevron = this.makeIcon('chevron');
-                    chevron.classList.add('projects-container__chevron');
-                    if (!collapsed) chevron.classList.add('projects-container__chevron--expanded');
-                    // The chevron is placed after the label, so it no longer
-                    // consumes 20px of indentation before every folder icon.
                     entry.addEventListener('click', () => {
-                        if (collapsed) this.collapsedFolders.delete(folderPath);
-                        else this.collapsedFolders.add(folderPath);
+                        if (this.collapsedFolders.has(path)) this.collapsedFolders.delete(path);
+                        else this.collapsedFolders.add(path);
+                        this.saveCollapsedState();
                         this.injectProjects();
                     });
-                } else if (project.url) {
-                    entry.href = project.url;
                 }
 
-                const icon = this.makeIcon('folder');
+                const icon = this.makeIcon(folder ? 'folder' : 'project');
                 icon.classList.add('projects-container__folder-icon');
                 entry.append(icon);
                 const label = document.createElement('span');
                 label.className = 'projects-container__list-link-name';
                 label.textContent = project.name;
                 entry.append(label);
-                if (isHeading) {
-                    entry.append(chevron);
+                row.append(entry);
+
+                if (folder) {
+                    const collapsed = this.collapsedFolders.has(path);
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'projects-container__expand-button';
+                    button.title = collapsed ? '展开 ' + project.name : '折叠 ' + project.name;
+                    button.setAttribute('aria-label', button.title);
+                    button.setAttribute('aria-expanded', String(!collapsed));
+                    const chevron = this.makeIcon('chevron');
+                    chevron.classList.add('projects-container__chevron');
+                    if (!collapsed) chevron.classList.add('projects-container__chevron--expanded');
+                    button.append(chevron);
+                    button.addEventListener('click', () => {
+                        if (collapsed) this.collapsedFolders.delete(path);
+                        else this.collapsedFolders.add(path);
+                        this.saveCollapsedState();
+                        this.injectProjects();
+                    });
+                    row.append(button);
+                    if (this.apiFresh && !this.moveInProgress) {
+                        row.draggable = true;
+                        row.title = project.name + '（拖拽移动目录）';
+                        row.addEventListener('dragstart', event => {
+                            this.dragPath = path;
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', path);
+                            row.classList.add('projects-container__dragging');
+                        });
+                        row.addEventListener('dragend', () => {
+                            this.dragPath = null;
+                            row.classList.remove('projects-container__dragging');
+                            document.querySelectorAll('.projects-container__drop-target')
+                                .forEach(node => node.classList.remove('projects-container__drop-target'));
+                        });
+                    }
+                    this.bindDropTarget(row, path);
                 }
-                item.append(entry);
+                item.append(row);
                 list.append(item);
             }
-
             container.replaceChildren(titleButton, list);
             return true;
         } finally {
