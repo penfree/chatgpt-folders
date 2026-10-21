@@ -366,6 +366,113 @@ class Extension {
 
     
 
+    closeProjectActions() {
+        if (this.projectActionsMenu) {
+            this.projectActionsMenu.remove();
+            this.projectActionsMenu = null;
+        }
+        if (this.projectActionsOutsideHandler) {
+            document.removeEventListener('pointerdown', this.projectActionsOutsideHandler, true);
+            document.removeEventListener('keydown', this.projectActionsKeyHandler, true);
+            this.projectActionsOutsideHandler = null;
+            this.projectActionsKeyHandler = null;
+        }
+    }
+
+    showProjectActions(button, project) {
+        if (this.projectActionsMenu) {
+            this.closeProjectActions();
+            return;
+        }
+        const menu = document.createElement('div');
+        menu.className = 'projects-container__actions-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', '项目操作');
+        const rect = button.getBoundingClientRect();
+        const menuWidth = 184;
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = document.documentElement.clientHeight;
+        menu.style.left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8)) + 'px';
+        menu.style.top = Math.max(8, Math.min(rect.bottom + 4, viewportHeight - 140)) + 'px';
+
+        const addAction = (label, onClick, disabled = false) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'projects-container__actions-item';
+            item.textContent = label;
+            item.setAttribute('role', 'menuitem');
+            item.disabled = disabled;
+            item.addEventListener('click', async event => {
+                event.stopPropagation();
+                this.closeProjectActions();
+                if (!disabled) {
+                    try { await onClick(); }
+                    catch (error) {
+                        console.error('[ChatGPT folders] Project action failed:', error);
+                        window.alert('项目操作失败：' + error.message);
+                    }
+                }
+            });
+            menu.append(item);
+        };
+
+        addAction('打开项目', () => window.location.assign(project.url));
+        addAction('复制项目链接', async () => {
+            const url = new URL(project.url, window.location.origin).href;
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+                await navigator.clipboard.writeText(url);
+            } catch {
+                window.prompt('复制项目链接：', url);
+            }
+        });
+        addAction('重命名', () => this.promptRenameProject(project), !this.apiFresh || this.moveInProgress);
+
+        document.body.append(menu);
+        this.projectActionsMenu = menu;
+        this.projectActionsOutsideHandler = event => {
+            if (!menu.contains(event.target) && !button.contains(event.target)) {
+                this.closeProjectActions();
+            }
+        };
+        this.projectActionsKeyHandler = event => {
+            if (event.key === 'Escape') {
+                this.closeProjectActions();
+                button.focus();
+            }
+        };
+        document.addEventListener('pointerdown', this.projectActionsOutsideHandler, true);
+        document.addEventListener('keydown', this.projectActionsKeyHandler, true);
+        menu.querySelector('button:not(:disabled)')?.focus();
+    }
+
+    async promptRenameProject(project) {
+        if (!this.apiFresh || this.moveInProgress) throw new Error('项目列表尚未同步，请刷新后重试');
+        const record = this.rawProjects.find(item => item.id === project.id);
+        if (!record) throw new Error('无法找到原始项目');
+        const replacement = window.prompt('新的项目名称：', record.name);
+        if (replacement === null || replacement.trim() === record.name) return;
+        const name = replacement.trim();
+        if (!name) throw new Error('项目名称不能为空');
+        if (this.rawProjects.some(other => other.id !== record.id && other.name === name)) {
+            throw new Error('已经存在同名项目');
+        }
+        this.moveInProgress = true;
+        try {
+            await this.renameProject(record.id, record.name, name);
+            this.rawProjects = this.rawProjects.map(item =>
+                item.id === record.id ? { ...item, name } : item
+            );
+            this.projects = FolderModel.build(this.rawProjects);
+            await this.fetchProjects();
+            this.storeProjectsInCache();
+        } finally {
+            this.moveInProgress = false;
+            await this.injectProjects();
+            this.updateActiveStates();
+        }
+    }
+
     // Insert a standalone "项目目录" category next to the native Projects
     // heading. Never put our entire panel at the top of the global sidebar.
     findFolderMount() {
@@ -476,6 +583,7 @@ class Extension {
         const path = document.createElementNS(ns, 'path');
         const paths = {
             chevron: 'm9 18 6-6-6-6',
+            more: 'M5 12h.01 M12 12h.01 M19 12h.01',
             folder: 'M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z',
             // A document outline distinguishes leaf Projects from folders.
             project: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h6'
@@ -487,6 +595,7 @@ class Extension {
 
     async injectProjects() {
         if (this.mountInProgress) return false;
+        this.closeProjectActions();
         this.mountInProgress = true;
         try {
             const mount = await this.waitForMainElement();
@@ -603,6 +712,24 @@ class Extension {
                 label.textContent = project.name;
                 entry.append(label);
                 row.append(entry);
+
+                // Mirror the native Projects list: reveal the ellipsis button
+                // when a leaf Project row is hovered or keyboard-focused.
+                if (isProject && !folder) {
+                    const actions = document.createElement('button');
+                    actions.type = 'button';
+                    actions.className = 'projects-container__actions-button';
+                    actions.title = '项目操作';
+                    actions.setAttribute('aria-label', '项目操作：' + project.name);
+                    actions.setAttribute('aria-haspopup', 'menu');
+                    actions.append(this.makeIcon('more'));
+                    actions.addEventListener('click', event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        this.showProjectActions(actions, project);
+                    });
+                    row.append(actions);
+                }
 
                 if (folder) {
                     const collapsed = this.collapsedFolders.has(path);
