@@ -72,11 +72,10 @@ class Extension {
             if (last_url !== window.location.href) {
                 // The native ChatGPT conversation header is left untouched.
                 last_url = window.location.href;
-                if (this.observer_active === true) {
+                if (this.observer_active === true && !this.moveInProgress) {
                     this.observer_active = false;
                     //console.log('RUN URL OBSERVER');
                     await this.sleep(1000); // small delay to ensure data is ready server side
-                    if (this.moveInProgress) return;
                     await this.fetchProjects();
                     this.storeProjectsInCache();
                     await this.injectProjects();
@@ -94,11 +93,10 @@ class Extension {
             if (last_title !== document.title) {
                 // The native ChatGPT conversation header is left untouched.
                 last_title = document.title;
-                if (this.observer_active === true) {
+                if (this.observer_active === true && !this.moveInProgress) {
                     this.observer_active = false;
                     //console.log('RUN TITLE OBSERVER');
                     await this.sleep(15000); // small delay to ensure data is ready server side
-                    if (this.moveInProgress) return;
                     await this.fetchProjects();
                     this.storeProjectsInCache();
                     await this.injectProjects();
