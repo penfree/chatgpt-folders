@@ -443,6 +443,7 @@ class Extension {
                 if (project.done) item.classList.add('projects-container__list-item--done');
 
                 const isHeading = project.type === 'heading';
+                let chevron = null;
                 const entry = document.createElement(isHeading ? 'button' : 'a');
                 entry.className = 'projects-container__list-link';
                 entry.title = project.name;
@@ -451,7 +452,7 @@ class Extension {
                     const folderPath = headings.slice(0, level + 1).join(' / ');
                     const collapsed = this.collapsedFolders.has(folderPath);
                     entry.setAttribute('aria-expanded', String(!collapsed));
-                    const chevron = this.makeIcon('chevron');
+                    chevron = this.makeIcon('chevron');
                     chevron.classList.add('projects-container__chevron');
                     if (!collapsed) chevron.classList.add('projects-container__chevron--expanded');
                     // The chevron is placed after the label, so it no longer
