@@ -394,15 +394,40 @@ class Extension {
         );
 
         if (nativeProjectTitle) {
-            const headerButton =
+            // A title button may live inside a flex row alongside the two
+            // native Project actions. Inserting before titleButton.parentElement
+            // splits that row and shifts the + / more buttons into our section.
+            // Select the smallest whole header row containing its controls.
+            let headerRow = null;
+            let fallback = null;
+            for (let node = nativeProjectTitle.parentElement;
+                node && node !== sidebar; node = node.parentElement) {
+                const bounds = node.getBoundingClientRect();
+                const controls = node.querySelectorAll('button, [role="button"]');
+                if (!fallback && controls.length >= 1) fallback = node;
+                // A section heading is short; larger ancestors include the
+                // entire Project list and must NOT be used as the row.
+                if (bounds.height > 0 && bounds.height <= 100 &&
+                    bounds.width >= 150 && controls.length >= 2) {
+                    headerRow = node;
+                    break;
+                }
+            }
+            headerRow ||= fallback ||
                 nativeProjectTitle.closest('button, [role="button"]') ||
                 nativeProjectTitle;
-            // Keep the entire native heading row (including its controls)
-            // together. Place our section immediately before that heading.
-            const headerRow = headerButton.parentElement &&
-                headerButton.parentElement !== sidebar
-                ? headerButton.parentElement
-                : headerButton;
+
+            // Never inject as a child of a horizontal native header row.
+            while (headerRow.parentElement && headerRow.parentElement !== sidebar) {
+                const parent = headerRow.parentElement;
+                const style = getComputedStyle(parent);
+                const rect = parent.getBoundingClientRect();
+                if (style.display !== 'flex' ||
+                    (style.flexDirection !== 'row' && style.flexDirection !== 'row-reverse') ||
+                    rect.height > 100) break;
+                headerRow = parent;
+            }
+
             if (headerRow.parentNode) {
                 return {
                     parent: headerRow.parentNode,
