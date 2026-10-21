@@ -1,10 +1,10 @@
-/* Only style our native-sidebar "文件夹" section.
+/* Only style our native-sidebar "项目目录" section.
    Never restyle the surrounding ChatGPT app or its Projects. */
 .projects-container {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    padding: 0 8px;
+    padding: 0;
     margin: 4px 0 8px;
     border: 0;
     border-radius: 0;
@@ -34,7 +34,7 @@
     gap: 8px;
     width: 100%;
     min-height: 32px;
-    padding: 0 8px 0 12px;
+    padding: 0 8px 0 var(--folders-title-indent, 12px);
     text-align: left;
     color: var(--text-secondary, inherit);
     font-size: var(--text-sm, 14px);
@@ -87,6 +87,7 @@
 }
 
 .projects-container__list-link-name {
+    color: #000;
     display: block;
     flex: 1;
     min-width: 0;
@@ -115,15 +116,11 @@
     width: 12px;
     height: 12px;
     flex-basis: 12px;
+    margin-left: auto;
 }
 
 .projects-container__chevron--expanded {
     transform: rotate(90deg);
-}
-
-.projects-container__list-item:not(:has(.projects-container__chevron))
-.projects-container__list-link {
-    padding-left: calc(28px + var(--folder-depth, 0) * 16px);
 }
 
 .projects-container__list-item--active .projects-container__list-link {
