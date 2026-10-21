@@ -50,6 +50,7 @@ class Extension {
         this.setupUrlObserver();
         this.setupTitleObserver();
         this.setupScrollObserver();
+        this.setupSidebarObserver();
 
         // make the main run
         this.observer_active = false;
@@ -276,79 +277,127 @@ class Extension {
         //console.log('fetchProjects(): END');
     }
 
-    async waitForMainElement() {
-        while (true) {
-            if (document.querySelector('.group.__menu-item[href*="project"]') !== null) {
-                break;
+    async waitForMainElement(timeoutMs = 8000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const legacy = document.querySelector('.group.__menu-item[href*="project"]');
+            const anchor = legacy && legacy.closest('div');
+            if (anchor && anchor.parentNode) {
+                return { parent: anchor.parentNode, before: anchor };
             }
-            await this.sleep(100);
+
+            // Modern ChatGPT sidebar: native Projects may not be anchor links.
+            // Use layout/semantic containers rather than generated class names.
+            const candidates = Array.from(document.querySelectorAll('aside, nav, [role="navigation"]'))
+                .filter(element => {
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    return rect.width >= 160 && rect.height >= 160 &&
+                        rect.left >= -20 && rect.left < window.innerWidth / 2 &&
+                        style.display !== 'none' && style.visibility !== 'hidden';
+                });
+            const sidebar =
+                candidates.find(el => el.tagName.toLowerCase() === 'aside') ||
+                candidates.find(el => /chat|history|sidebar|project|项目|历史/i.test(
+                    el.getAttribute('aria-label') || ''
+                )) ||
+                candidates[0];
+
+            if (sidebar) {
+                return { parent: sidebar, before: sidebar.firstChild };
+            }
+            await this.sleep(250);
         }
-        this.$div = document.querySelector('.group.__menu-item[href*="project"]').closest('div');
+        console.warn('[ChatGPT folders] Sidebar not found; will retry.');
+        return null;
     }
+
+    
 
     async sleep(ms) {
         await new Promise(resolve => setTimeout(() => resolve(), ms));
     }
 
     async injectProjects() {
-        // wait for main element
-        await this.waitForMainElement();
-        //console.log('injectProjects(): START');
-        //console.log(this.$div);
-        if (this.$div.querySelector('.group.__menu-item:not(:first-child)') !== null) {
-            this.$div.querySelectorAll('.group.__menu-item:not(:first-child)').forEach($el => {
-                // hide first (also important for subsequent runs)
-                $el.classList.remove('visible');
-                // show opened
-                if ($el.nextElementSibling !== null && $el.nextElementSibling.classList.contains('overflow-hidden')) {
-                    //$el.style.opacity = 0.5;
-                    //$el.style.display = 'none';
-                    $el.classList.add('visible');
+        if (this.mountInProgress) {
+            return false;
+        }
+        this.mountInProgress = true;
+        try {
+            const mount = await this.waitForMainElement();
+            if (!mount) {
+                return false;
+            }
+
+            let container = document.querySelector('.projects-container[data-chatgpt-folders="true"]');
+            if (!container) {
+                container = document.createElement('div');
+                container.className = 'projects-container';
+                container.setAttribute('data-chatgpt-folders', 'true');
+                container.setAttribute('role', 'navigation');
+                container.setAttribute('aria-label', 'Project folders');
+            }
+            if (container.parentNode !== mount.parent) {
+                mount.parent.insertBefore(container, mount.before);
+            }
+
+            // Use DOM APIs, never parse untrusted Project names as HTML.
+            const list = document.createElement('ul');
+            list.className = 'projects-container__list';
+            for (const project of this.projects) {
+                const item = document.createElement('li');
+                item.className = [
+                    'projects-container__list-item',
+                    'projects-container__list-item--' + project.type,
+                    'projects-container__list-item--level-' + project.level,
+                    project.done ? 'projects-container__list-item--done' : ''
+                ].filter(Boolean).join(' ');
+                if (project.id != null) item.setAttribute('data-id', project.id);
+
+                const link = document.createElement(project.type === 'heading' ? 'span' : 'a');
+                link.className = 'projects-container__list-link';
+                link.title = project.name;
+                if (project.type === 'project' && project.url) {
+                    link.setAttribute('href', project.url);
                 }
-            });
+
+                const icon = document.createElement('span');
+                icon.className = 'projects-container__list-link-icon';
+                icon.textContent = project.icon;
+                const name = document.createElement('span');
+                name.className = 'projects-container__list-link-name';
+                name.textContent = project.name;
+                link.append(icon, name);
+                if (project.type === 'project') {
+                    const count = document.createElement('span');
+                    count.className = 'projects-container__list-link-count';
+                    count.textContent = ' (' + (project.count || 0) + ')';
+                    link.append(count);
+                }
+                item.append(link);
+                list.append(item);
+            }
+            container.replaceChildren(list);
+            return true;
+        } finally {
+            this.mountInProgress = false;
         }
-        if (document.querySelector('.projects-container') !== null) {
-            document.querySelector('.projects-container').remove();
-        }
-        let $child = new DOMParser().parseFromString(
-            `
-                <div class="projects-container">
-                    <ul class="projects-container__list">
-                    </ul>
-                </div>
-            `,
-            'text/html'
-        ).body.childNodes[0];
-        this.$div.parentNode.insertBefore($child, this.$div);
-        //console.log(this.projects);
-        for (let projects__value of this.projects) {
-            $child.querySelector('.projects-container__list').insertAdjacentHTML(
-                'beforeend',
-                `
-                    <li
-                        class="
-                            projects-container__list-item
-                            projects-container__list-item--${this.escapeHtml(projects__value.type)}
-                            projects-container__list-item--level-${this.escapeHtml(projects__value.level)}
-                            ${projects__value.done === true ? 'projects-container__list-item--done' : ''}
-                        "
-                        ${projects__value.id !== null ? 'data-id="' + this.escapeHtml(projects__value.id) + '"' : ''}
-                    >
-                        <a
-                            class="projects-container__list-link"
-                            href="${this.escapeHtml(projects__value.url)}"
-                            title="${this.escapeHtml(projects__value.name)}"
-                        >
-                            <span class="projects-container__list-link-icon">${this.escapeHtml(projects__value.icon)}</span>
-                            <span class="projects-container__list-link-name">${this.escapeHtml(projects__value.name)}</span>
-                            ${projects__value.type === 'project' ? '<span class="projects-container__list-link-count">(' + this.escapeHtml(projects__value.count) + ')</span>' : ''}
-                        </a>
-                    </li>
-                `
-            );
-        }
-        //console.log('injectProjects(): END');
     }
+
+    // React may replace the sidebar without a navigation or title change.
+    setupSidebarObserver() {
+        setInterval(() => {
+            if (this.projects.length === 0 || this.mountInProgress ||
+                document.querySelector('.projects-container[data-chatgpt-folders="true"]')) {
+                return;
+            }
+            this.injectProjects()
+                .then(() => this.updateActiveStates())
+                .catch(error => console.warn('[ChatGPT folders] Remount failed:', error));
+        }, 2000);
+    }
+
+    
 
     updateActiveStates() {
         //console.log('updateActiveStates(): START');
