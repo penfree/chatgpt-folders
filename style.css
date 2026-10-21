@@ -123,7 +123,7 @@
 
 .projects-container__list-item:not(:has(.projects-container__chevron))
 .projects-container__list-link {
-    padding-left: calc(20px + var(--folder-depth, 0) * 16px);
+    padding-left: calc(28px + var(--folder-depth, 0) * 16px);
 }
 
 .projects-container__list-item--active .projects-container__list-link {
