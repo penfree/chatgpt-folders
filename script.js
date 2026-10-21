@@ -264,7 +264,7 @@ class Extension {
         }
     }
 
-    // Insert a standalone "文件夹" category next to the native Projects
+    // Insert a standalone "项目目录" category next to the native Projects
     // heading. Never put our entire panel at the top of the global sidebar.
     findFolderMount() {
         const candidates = Array.from(
@@ -366,7 +366,7 @@ class Extension {
                 container = document.createElement('section');
                 container.className = 'projects-container';
                 container.setAttribute('data-chatgpt-folders', 'true');
-                container.setAttribute('aria-label', '文件夹');
+                container.setAttribute('aria-label', '项目目录');
             }
 
             if (
@@ -382,7 +382,7 @@ class Extension {
             titleButton.setAttribute('aria-expanded', String(this.folderSectionExpanded));
             const title = document.createElement('span');
             title.className = 'projects-container__category-title';
-            title.textContent = '文件夹';
+            title.textContent = '项目目录';
             // Native title typography can vary across ChatGPT versions.
             if (mount.nativeLabel) {
                 const nativeStyle = getComputedStyle(mount.nativeLabel);
