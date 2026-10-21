@@ -63,6 +63,7 @@ The directory tree is reconstructed from original Project names, using ` - `
 
 - 📁 Folder nodes can expand/collapse.
 - 📄 Leaf Projects use a document icon so they are distinguishable from folders.
+- Hovering over a leaf Project reveals a right-side `···` action button with **Open**, **Copy link**, and **Rename**. Rename uses the existing native Project PATCH path; the menu does not currently attempt to reproduce all of ChatGPT's undocumented native menu actions.
 - A Project that is both a parent and an actual Project is shown **once**;
   clicking its name expands it and navigates to the native Project.
   The chevron expands/collapses without navigating.
