@@ -501,47 +501,41 @@ class Extension {
         );
 
         if (nativeProjectTitle) {
-            // A title button may live inside a flex row alongside the two
-            // native Project actions. Inserting before titleButton.parentElement
-            // splits that row and shifts the + / more buttons into our section.
-            // Select the smallest whole header row containing its controls.
-            let headerRow = null;
-            let fallback = null;
+            // Observed ChatGPT sidebar DOM (2026-10):
+            // SPAN title
+            //   BUTTON.group/section-toggle
+            //     DIV.flex
+            //       DIV.text-tertiary
+            //         DIV.group/nav-section-title  <-- also owns + / ... actions
+            //           DIV.group/nav-section
+            //             SECTION.group/nav-section <-- COMPLETE Projects section
+            //
+            // The title/header wrappers can contain ALL Project rows and
+            // controls (their measured height can exceed 600px). Do not use
+            // button counts, flex layout, or bounding-box height to guess
+            // the header boundary: doing so inserts our category inside the
+            // existing native Projects section and displaces its controls.
+            let projectSection = null;
             for (let node = nativeProjectTitle.parentElement;
                 node && node !== sidebar; node = node.parentElement) {
-                const bounds = node.getBoundingClientRect();
-                const controls = node.querySelectorAll('button, [role="button"]');
-                if (!fallback && controls.length >= 1) fallback = node;
-                // A section heading is short; larger ancestors include the
-                // entire Project list and must NOT be used as the row.
-                if (bounds.height > 0 && bounds.height <= 100 &&
-                    bounds.width >= 150 && controls.length >= 2) {
-                    headerRow = node;
+                if (node.tagName === 'SECTION' &&
+                    node.classList?.contains('group/nav-section')) {
+                    projectSection = node;
                     break;
                 }
             }
-            headerRow ||= fallback ||
-                nativeProjectTitle.closest('button, [role="button"]') ||
-                nativeProjectTitle;
-
-            // Never inject as a child of a horizontal native header row.
-            while (headerRow.parentElement && headerRow.parentElement !== sidebar) {
-                const parent = headerRow.parentElement;
-                const style = getComputedStyle(parent);
-                const rect = parent.getBoundingClientRect();
-                if (style.display !== 'flex' ||
-                    (style.flexDirection !== 'row' && style.flexDirection !== 'row-reverse') ||
-                    rect.height > 100) break;
-                headerRow = parent;
-            }
-
-            if (headerRow.parentNode) {
+            if (projectSection && projectSection.parentElement) {
                 return {
-                    parent: headerRow.parentNode,
-                    before: headerRow,
+                    parent: projectSection.parentElement,
+                    before: projectSection,
                     nativeLabel: nativeProjectTitle
                 };
             }
+
+            // If ChatGPT changes the section markup, never split a header
+            // row as a fallback. Render in the sidebar itself until a
+            // recognisable native Projects section appears.
+            return { parent: sidebar, before: null, nativeLabel: nativeProjectTitle };
         }
 
         // Loading / collapsed Projects: still render within the actual
