@@ -47,8 +47,7 @@
     min-width: 0;
 }
 
-.projects-container__category-toggle:hover,
-.projects-container__list-link:hover {
+.projects-container__category-toggle:hover {
     background: var(--bg-elevated-secondary, rgba(128, 128, 128, 0.12));
 }
 
@@ -70,14 +69,43 @@
     min-width: 0;
 }
 
+.projects-container__row {
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    padding-left: calc(8px + var(--folder-depth, 0) * 16px);
+}
+
+.projects-container__row:hover,
+.projects-container__row.projects-container__drop-target {
+    background: var(--bg-elevated-secondary, rgba(128, 128, 128, 0.12));
+}
+
+.projects-container__row.projects-container__drop-target {
+    outline: 2px solid var(--text-tertiary, #999);
+    outline-offset: -2px;
+}
+
+.projects-container__row[draggable="true"] {
+    cursor: grab;
+}
+
+.projects-container__row.projects-container__dragging {
+    opacity: 0.45;
+}
+
 .projects-container__list-link {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     box-sizing: border-box;
     min-height: 36px;
-    padding: 6px 8px 6px calc(8px + var(--folder-depth, 0) * 16px);
+    padding: 6px 8px 6px 0;
     border-radius: 8px;
     text-align: left;
     white-space: nowrap;
@@ -116,14 +144,35 @@
     width: 12px;
     height: 12px;
     flex-basis: 12px;
-    margin-left: auto;
+}
+
+.projects-container__expand-button {
+    width: 28px;
+    min-width: 28px;
+    height: 32px;
+    border: 0;
+    padding: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+    color: var(--text-tertiary, currentColor);
+    border-radius: 8px;
+    cursor: pointer;
+}
+.projects-container__expand-button:hover {
+    background: var(--bg-elevated-secondary, rgba(128, 128, 128, 0.18));
+}
+.projects-container__category-toggle.projects-container__drop-target {
+    outline: 2px solid var(--text-tertiary, #999);
+    outline-offset: -2px;
 }
 
 .projects-container__chevron--expanded {
     transform: rotate(90deg);
 }
 
-.projects-container__list-item--active .projects-container__list-link {
+.projects-container__list-item--active .projects-container__row {
     background: var(--bg-elevated-secondary, rgba(128, 128, 128, 0.12));
     font-weight: 600;
 }
