@@ -1,35 +1,55 @@
 {
     "manifest_version": 3,
     "name": "ChatGPT folders",
-    "description": "Organize your projects in sortable folders inside chatgpt.com.",
+    "description": "Organize ChatGPT Projects by title paths with draggable folders.",
     "version": "42.0.2",
     "browser_specific_settings": {
         "gecko": {
             "id": "chatgpt-folders@vielhuber.de",
             "data_collection_permissions": {
-                "required": ["none"]
+                "required": [
+                    "none"
+                ]
             }
         }
     },
-    "host_permissions": ["https://chatgpt.com/*", "https://*.chatgpt.com/*"],
+    "host_permissions": [
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*"
+    ],
     "web_accessible_resources": [
         {
-            "resources": ["*"],
-            "matches": ["https://chatgpt.com/*", "https://*.chatgpt.com/*"]
+            "resources": [
+                "*"
+            ],
+            "matches": [
+                "https://chatgpt.com/*",
+                "https://*.chatgpt.com/*"
+            ]
         }
     ],
     "background": {
         "service_worker": "background.js",
-        "scripts": ["background.js"]
+        "scripts": [
+            "background.js"
+        ]
     },
     "icons": {
         "128": "icon.png"
     },
     "content_scripts": [
         {
-            "matches": ["https://chatgpt.com/*", "https://*.chatgpt.com/*"],
-            "js": ["script.js"],
-            "css": ["style.css"]
+            "matches": [
+                "https://chatgpt.com/*",
+                "https://*.chatgpt.com/*"
+            ],
+            "js": [
+                "folder-model.js",
+                "script.js"
+            ],
+            "css": [
+                "style.css"
+            ]
         }
     ]
 }
