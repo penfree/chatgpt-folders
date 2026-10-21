@@ -76,6 +76,7 @@ class Extension {
                     this.observer_active = false;
                     //console.log('RUN URL OBSERVER');
                     await this.sleep(1000); // small delay to ensure data is ready server side
+                    if (this.moveInProgress) return;
                     await this.fetchProjects();
                     this.storeProjectsInCache();
                     await this.injectProjects();
@@ -97,6 +98,7 @@ class Extension {
                     this.observer_active = false;
                     //console.log('RUN TITLE OBSERVER');
                     await this.sleep(15000); // small delay to ensure data is ready server side
+                    if (this.moveInProgress) return;
                     await this.fetchProjects();
                     this.storeProjectsInCache();
                     await this.injectProjects();
@@ -270,22 +272,43 @@ class Extension {
 
         this.moveInProgress = true;
         this.dragPath = null;
-        const updated = [];
         let rollbackFailed = 0;
+        let committed = false;
         try {
+            // Preflight all affected Projects before changing anything.
+            for (const change of plan.changes) {
+                const current = await this.getProjectDetails(change.id);
+                if (current.display.name !== change.oldName) {
+                    throw new Error('项目在操作前已更名：' + change.oldName);
+                }
+            }
+
             for (const change of plan.changes) {
                 await this.renameProject(change.id, change.oldName, change.newName);
-                updated.push(change);
             }
+            committed = true;
+            // Keep the UI consistent even when an immediate refetch fails.
+            this.rawProjects = this.rawProjects.map(record => {
+                const change = plan.changes.find(c => c.id === record.id);
+                return change ? { ...record, name: change.newName } : record;
+            });
+            this.projects = FolderModel.build(this.rawProjects);
             this.collapsedFolders.delete(plan.destination);
             this.saveCollapsedState();
-            window.alert('移动成功，已更新 ' + updated.length + ' 个项目。');
+            window.alert('移动成功，已更新 ' + plan.changes.length + ' 个项目。');
         } catch (error) {
             console.error('[ChatGPT folders] Batch rename failed:', error);
-            // Roll back already applied operations in reverse order.
-            for (const change of updated.reverse()) {
+            // An HTTP/network error can happen AFTER a PATCH succeeded. Check
+            // actual server state for every changed item, not only acknowledged
+            // requests, then roll back anything left with the new title.
+            for (const change of [...plan.changes].reverse()) {
                 try {
-                    await this.renameProject(change.id, change.newName, change.oldName);
+                    const current = await this.getProjectDetails(change.id);
+                    if (current.display.name === change.newName) {
+                        await this.renameProject(change.id, change.newName, change.oldName);
+                    } else if (current.display.name !== change.oldName) {
+                        rollbackFailed += 1;
+                    }
                 } catch (rollbackError) {
                     rollbackFailed += 1;
                     console.error('[ChatGPT folders] Rollback failed:', rollbackError);
@@ -293,19 +316,22 @@ class Extension {
             }
             window.alert('目录移动失败：' + error.message +
                 (rollbackFailed ? '\n有 ' + rollbackFailed +
-                ' 个项目回滚失败，请到原生“项目”列表核对名称。'
-                    : '\n已经尝试回滚所有已成功更新的项目。'));
+                ' 个项目无法确认或回滚，请到原生“项目”列表核对名称。'
+                    : '\n已确认或恢复受影响项目的原名称。'));
         } finally {
-            // Always re-sync from the server, even if rollback was incomplete.
+            // Always re-sync from ChatGPT, even if rollback is incomplete.
             await this.fetchProjects();
             this.storeProjectsInCache();
             this.moveInProgress = false;
+            if (committed && !this.apiFresh) {
+                window.alert('项目已更名，但刷新目录失败，请手动刷新 ChatGPT。');
+            }
             await this.injectProjects();
             this.updateActiveStates();
         }
     }
 
-    bindDropTarget(element, targetPath) {
+        bindDropTarget(element, targetPath) {
         const valid = () => {
             if (!this.dragPath || this.moveInProgress || !this.apiFresh) return false;
             try {
