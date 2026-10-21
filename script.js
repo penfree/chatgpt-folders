@@ -4,6 +4,8 @@ class Extension {
         this.access_token = null;
         this.$div = null;
         this.observer_active = true;
+        this.collapsedFolders = new Set();
+        this.folderSectionExpanded = true;
     }
 
     // escape API-derived values before they are interpolated into HTML strings
@@ -18,50 +20,30 @@ class Extension {
     }
 
     async init() {
-        // get access token
         this.getAccessToken();
+        if (!this.extensionShouldBeActive()) return;
 
-        // check activation
-        if (!this.extensionShouldBeActive()) {
-            return;
-        }
-
-        // set active class
-        document.body.classList.add('custom-chatgpt');
-
-        // inject images
-        document.documentElement.style.setProperty(
-            '--extension-bg-image',
-            `url("${(typeof browser !== 'undefined' && browser.runtime ? browser.runtime : chrome.runtime).getURL(
-                'bg.gif'
-            )}")`
-        );
-
-        // read from cache
+        // We only contribute a section to the existing sidebar.
+        // Do not customize ChatGPT's page background, headers, or native Projects.
         this.loadProjectsFromCache();
         if (this.projects.length > 0) {
             await this.injectProjects();
             this.updateActiveStates();
-            this.restoreScrollPosition();
-            this.insertTitleToTop();
         }
 
-        // setup observers
         this.setupUrlObserver();
         this.setupTitleObserver();
-        this.setupScrollObserver();
         this.setupSidebarObserver();
 
-        // make the main run
         this.observer_active = false;
         await this.fetchProjects();
         this.storeProjectsInCache();
         await this.injectProjects();
         this.updateActiveStates();
-        this.restoreScrollPosition();
-        this.insertTitleToTop();
         this.observer_active = true;
     }
+
+    
 
     getAccessToken() {
         let match = document.documentElement.outerHTML.match(/"accessToken":"(.*?)"/);
@@ -78,12 +60,11 @@ class Extension {
         let last_url = window.location.href;
         setInterval(async () => {
             if (last_url !== window.location.href) {
-                this.insertTitleToTop();
+                // The native ChatGPT conversation header is left untouched.
                 last_url = window.location.href;
                 if (this.observer_active === true) {
                     this.observer_active = false;
                     //console.log('RUN URL OBSERVER');
-                    await this.waitForMainElement();
                     await this.sleep(1000); // small delay to ensure data is ready server side
                     await this.fetchProjects();
                     this.storeProjectsInCache();
@@ -100,13 +81,11 @@ class Extension {
         let last_title = document.title;
         setInterval(async () => {
             if (last_title !== document.title) {
-                this.insertTitleToTop();
+                // The native ChatGPT conversation header is left untouched.
                 last_title = document.title;
                 if (this.observer_active === true) {
                     this.observer_active = false;
                     //console.log('RUN TITLE OBSERVER');
-                    // update name in projects first
-                    this.updateNameOfActiveProject();
                     await this.sleep(15000); // small delay to ensure data is ready server side
                     await this.fetchProjects();
                     this.storeProjectsInCache();
@@ -285,35 +264,62 @@ class Extension {
         }
     }
 
+    // Insert a standalone "文件夹" category next to the native Projects
+    // heading. Never put our entire panel at the top of the global sidebar.
+    findFolderMount() {
+        const candidates = Array.from(
+            document.querySelectorAll('aside, nav, [role="navigation"]')
+        ).filter(element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width >= 160 && rect.height >= 160 &&
+                rect.left >= -20 && rect.left < window.innerWidth / 2 &&
+                style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        const sidebar =
+            candidates.find(el => el.tagName.toLowerCase() === 'aside') ||
+            candidates.find(el => /chat|history|sidebar|project|项目|历史/i.test(
+                el.getAttribute('aria-label') || ''
+            )) || candidates[0];
+        if (!sidebar) return null;
+
+        const nativeProjectTitle = Array.from(
+            sidebar.querySelectorAll('span, button, h2, h3, p, div')
+        ).find(el =>
+            el.childElementCount === 0 &&
+            /^(Projects|项目)$/i.test(el.textContent.trim()) &&
+            !el.closest('[data-chatgpt-folders="true"]')
+        );
+
+        if (nativeProjectTitle) {
+            const headerButton =
+                nativeProjectTitle.closest('button, [role="button"]') ||
+                nativeProjectTitle;
+            // Keep the entire native heading row (including its controls)
+            // together. Place our section immediately before that heading.
+            const headerRow = headerButton.parentElement &&
+                headerButton.parentElement !== sidebar
+                ? headerButton.parentElement
+                : headerButton;
+            if (headerRow.parentNode) {
+                return {
+                    parent: headerRow.parentNode,
+                    before: headerRow,
+                    nativeLabel: nativeProjectTitle
+                };
+            }
+        }
+
+        // Loading / collapsed Projects: still render within the actual
+        // sidebar, then move beside Projects when the heading appears.
+        return { parent: sidebar, before: null, nativeLabel: null };
+    }
+
     async waitForMainElement(timeoutMs = 8000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
-            const legacy = document.querySelector('.group.__menu-item[href*="project"]');
-            const anchor = legacy && legacy.closest('div');
-            if (anchor && anchor.parentNode) {
-                return { parent: anchor.parentNode, before: anchor };
-            }
-
-            // Modern ChatGPT sidebar: native Projects may not be anchor links.
-            // Use layout/semantic containers rather than generated class names.
-            const candidates = Array.from(document.querySelectorAll('aside, nav, [role="navigation"]'))
-                .filter(element => {
-                    const rect = element.getBoundingClientRect();
-                    const style = getComputedStyle(element);
-                    return rect.width >= 160 && rect.height >= 160 &&
-                        rect.left >= -20 && rect.left < window.innerWidth / 2 &&
-                        style.display !== 'none' && style.visibility !== 'hidden';
-                });
-            const sidebar =
-                candidates.find(el => el.tagName.toLowerCase() === 'aside') ||
-                candidates.find(el => /chat|history|sidebar|project|项目|历史/i.test(
-                    el.getAttribute('aria-label') || ''
-                )) ||
-                candidates[0];
-
-            if (sidebar) {
-                return { parent: sidebar, before: sidebar.firstChild };
-            }
+            const mount = this.findFolderMount();
+            if (mount) return mount;
             await this.sleep(250);
         }
         console.warn('[ChatGPT folders] Sidebar not found; will retry.');
@@ -326,82 +332,161 @@ class Extension {
         await new Promise(resolve => setTimeout(() => resolve(), ms));
     }
 
+    // Use SVG rather than emojis, consistent with native ChatGPT icons.
+    makeIcon(kind) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '16');
+        svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '1.8');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.classList.add('projects-container__icon');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', kind === 'chevron'
+            ? 'm9 18 6-6-6-6'
+            : 'M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z');
+        svg.append(path);
+        return svg;
+    }
+
     async injectProjects() {
-        if (this.mountInProgress) {
-            return false;
-        }
+        if (this.mountInProgress) return false;
         this.mountInProgress = true;
         try {
             const mount = await this.waitForMainElement();
-            if (!mount) {
-                return false;
-            }
+            if (!mount) return false;
 
             let container = document.querySelector('.projects-container[data-chatgpt-folders="true"]');
             if (!container) {
-                container = document.createElement('div');
+                container = document.createElement('section');
                 container.className = 'projects-container';
                 container.setAttribute('data-chatgpt-folders', 'true');
-                container.setAttribute('role', 'navigation');
-                container.setAttribute('aria-label', 'Project folders');
+                container.setAttribute('aria-label', '文件夹');
             }
-            if (container.parentNode !== mount.parent) {
+
+            if (
+                container.parentNode !== mount.parent ||
+                (mount.before && container.nextSibling !== mount.before)
+            ) {
                 mount.parent.insertBefore(container, mount.before);
             }
 
-            // Use DOM APIs, never parse untrusted Project names as HTML.
+            const titleButton = document.createElement('button');
+            titleButton.type = 'button';
+            titleButton.className = 'projects-container__category-toggle';
+            titleButton.setAttribute('aria-expanded', String(this.folderSectionExpanded));
+            const title = document.createElement('span');
+            title.className = 'projects-container__category-title';
+            title.textContent = '文件夹';
+            // Native title typography can vary across ChatGPT versions.
+            if (mount.nativeLabel) {
+                const nativeStyle = getComputedStyle(mount.nativeLabel);
+                title.style.fontSize = nativeStyle.fontSize;
+                title.style.fontWeight = nativeStyle.fontWeight;
+                title.style.color = nativeStyle.color;
+            }
+            titleButton.append(title);
+            const categoryChevron = this.makeIcon('chevron');
+            categoryChevron.classList.add('projects-container__category-chevron');
+            if (this.folderSectionExpanded) categoryChevron.classList.add('projects-container__chevron--expanded');
+            titleButton.append(categoryChevron);
+            titleButton.addEventListener('click', () => {
+                this.folderSectionExpanded = !this.folderSectionExpanded;
+                this.injectProjects();
+            });
+
             const list = document.createElement('ul');
             list.className = 'projects-container__list';
+            list.setAttribute('role', 'tree');
+            list.hidden = !this.folderSectionExpanded;
+
+            const headings = [];
+            let hiddenAncestor = false;
             for (const project of this.projects) {
+                const level = Math.max(0, Number(project.level) || 0);
+                // This category only lists grouped Projects. Plain Projects
+                // remain accessible in ChatGPT's original "项目" category.
+                if (project.type === 'project' && level === 0) continue;
+                if (project.type !== 'project' && project.type !== 'heading') continue;
+
+                if (project.type === 'heading') {
+                    headings.length = level;
+                    headings[level] = project.name;
+                }
+                hiddenAncestor = headings.slice(0, level).some((_, depth) =>
+                    this.collapsedFolders.has(headings.slice(0, depth + 1).join(' / '))
+                );
+                if (hiddenAncestor) continue;
+
                 const item = document.createElement('li');
-                item.className = [
-                    'projects-container__list-item',
-                    'projects-container__list-item--' + project.type,
-                    'projects-container__list-item--level-' + project.level,
-                    project.done ? 'projects-container__list-item--done' : ''
-                ].filter(Boolean).join(' ');
+                item.className = 'projects-container__list-item';
+                item.style.setProperty('--folder-depth', String(level));
+                item.setAttribute('role', 'treeitem');
+                item.setAttribute('aria-level', String(level + 1));
                 if (project.id != null) item.setAttribute('data-id', project.id);
+                if (project.done) item.classList.add('projects-container__list-item--done');
 
-                const link = document.createElement(project.type === 'heading' ? 'span' : 'a');
-                link.className = 'projects-container__list-link';
-                link.title = project.name;
-                if (project.type === 'project' && project.url) {
-                    link.setAttribute('href', project.url);
+                const isHeading = project.type === 'heading';
+                const entry = document.createElement(isHeading ? 'button' : 'a');
+                entry.className = 'projects-container__list-link';
+                entry.title = project.name;
+                if (isHeading) {
+                    entry.type = 'button';
+                    const folderPath = headings.slice(0, level + 1).join(' / ');
+                    const collapsed = this.collapsedFolders.has(folderPath);
+                    entry.setAttribute('aria-expanded', String(!collapsed));
+                    const chevron = this.makeIcon('chevron');
+                    chevron.classList.add('projects-container__chevron');
+                    if (!collapsed) chevron.classList.add('projects-container__chevron--expanded');
+                    entry.append(chevron);
+                    entry.addEventListener('click', () => {
+                        if (collapsed) this.collapsedFolders.delete(folderPath);
+                        else this.collapsedFolders.add(folderPath);
+                        this.injectProjects();
+                    });
+                } else if (project.url) {
+                    entry.href = project.url;
                 }
 
-                const icon = document.createElement('span');
-                icon.className = 'projects-container__list-link-icon';
-                icon.textContent = project.icon;
-                const name = document.createElement('span');
-                name.className = 'projects-container__list-link-name';
-                name.textContent = project.name;
-                link.append(icon, name);
-                if (project.type === 'project') {
-                    const count = document.createElement('span');
-                    count.className = 'projects-container__list-link-count';
-                    count.textContent = ' (' + (project.count || 0) + ')';
-                    link.append(count);
-                }
-                item.append(link);
+                const icon = this.makeIcon('folder');
+                icon.classList.add('projects-container__folder-icon');
+                entry.append(icon);
+                const label = document.createElement('span');
+                label.className = 'projects-container__list-link-name';
+                label.textContent = project.name;
+                entry.append(label);
+                item.append(entry);
                 list.append(item);
             }
-            container.replaceChildren(list);
+
+            container.replaceChildren(titleButton, list);
             return true;
         } finally {
             this.mountInProgress = false;
         }
     }
 
-    // React may replace the sidebar without a navigation or title change.
+    // New ChatGPT uses React to rebuild navigation sections; maintain our
+    // position immediately beside Projects without creating duplicates.
     setupSidebarObserver() {
         setInterval(() => {
-            if (this.projects.length === 0 || this.mountInProgress ||
-                document.querySelector('.projects-container[data-chatgpt-folders="true"]')) {
-                return;
+            if (this.mountInProgress) return;
+            const container = document.querySelector('.projects-container[data-chatgpt-folders="true"]');
+            const mount = this.findFolderMount();
+            if (!mount || this.projects.length === 0) return;
+            const incorrectlyPlaced = !container ||
+                container.parentNode !== mount.parent ||
+                (mount.before && container.nextSibling !== mount.before);
+            if (incorrectlyPlaced) {
+                this.injectProjects()
+                    .then(() => this.updateActiveStates())
+                    .catch(error => console.warn('[ChatGPT folders] Remount failed:', error));
             }
-            this.injectProjects()
-                .then(() => this.updateActiveStates())
-                .catch(error => console.warn('[ChatGPT folders] Remount failed:', error));
         }, 2000);
     }
 
