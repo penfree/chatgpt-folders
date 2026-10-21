@@ -375,6 +375,17 @@ class Extension {
             ) {
                 mount.parent.insertBefore(container, mount.before);
             }
+            // Measure the native "项目" heading on the current sidebar and
+            // align "项目目录" to that exact x-coordinate. This avoids a
+            // hard-coded offset that differs across ChatGPT versions.
+            if (mount.nativeLabel) {
+                const nativeLeft = mount.nativeLabel.getBoundingClientRect().left;
+                const sectionLeft = container.getBoundingClientRect().left;
+                const leftPadding = nativeLeft - sectionLeft;
+                if (Number.isFinite(leftPadding) && leftPadding >= 0 && leftPadding <= 80) {
+                    container.style.setProperty('--folders-title-indent', leftPadding + 'px');
+                }
+            }
 
             const titleButton = document.createElement('button');
             titleButton.type = 'button';
@@ -443,7 +454,8 @@ class Extension {
                     const chevron = this.makeIcon('chevron');
                     chevron.classList.add('projects-container__chevron');
                     if (!collapsed) chevron.classList.add('projects-container__chevron--expanded');
-                    entry.append(chevron);
+                    // The chevron is placed after the label, so it no longer
+                    // consumes 20px of indentation before every folder icon.
                     entry.addEventListener('click', () => {
                         if (collapsed) this.collapsedFolders.delete(folderPath);
                         else this.collapsedFolders.add(folderPath);
@@ -460,6 +472,9 @@ class Extension {
                 label.className = 'projects-container__list-link-name';
                 label.textContent = project.name;
                 entry.append(label);
+                if (isHeading) {
+                    entry.append(chevron);
+                }
                 item.append(entry);
                 list.append(item);
             }
