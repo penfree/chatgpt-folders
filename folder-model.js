@@ -100,3 +100,8 @@ class FolderModel {
             destination: destination.join(this.delimiter), changes: changed };
     }
 }
+
+// Node.js test runner only; browser content scripts use the class directly.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = FolderModel;
+}
