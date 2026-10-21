@@ -131,6 +131,8 @@ class Extension {
 
     async fetchProjects() {
         //console.log('fetchProjects(): START');
+        const previousProjects = this.projects;
+        try {
         this.projects = [];
         let cursor = null;
         while (true) {
@@ -163,6 +165,9 @@ class Extension {
                     }
                 );
             });
+            if (!response || !Array.isArray(response.items)) {
+                throw new Error('Unexpected Project API response');
+            }
             if (response.items.length > 0) {
                 for (let items__value of response.items) {
                     //console.log(items__value);
@@ -274,7 +279,10 @@ class Extension {
         }
 
         //console.log(this.projects);
-        //console.log('fetchProjects(): END');
+        } catch (error) {
+            this.projects = previousProjects;
+            console.warn('[ChatGPT folders] Unable to refresh projects; using cached data.', error);
+        }
     }
 
     async waitForMainElement(timeoutMs = 8000) {
@@ -403,7 +411,7 @@ class Extension {
         //console.log('updateActiveStates(): START');
         if (document.querySelector('.projects-container__list-item') !== null) {
             document.querySelectorAll('.projects-container__list-item').forEach($el => {
-                if (window.location.href.includes($el.getAttribute('data-id'))) {
+                if ($el.getAttribute('data-id') && window.location.href.includes($el.getAttribute('data-id'))) {
                     $el.classList.add('projects-container__list-item--active');
                 } else {
                     $el.classList.remove('projects-container__list-item--active');
@@ -417,7 +425,7 @@ class Extension {
         if (document.querySelector('a[href="#edit-title"]') !== null) {
             if (document.querySelector('.projects-container__list-item') !== null) {
                 document.querySelectorAll('.projects-container__list-item').forEach($el => {
-                    if (window.location.href.includes($el.getAttribute('data-id'))) {
+                    if ($el.getAttribute('data-id') && window.location.href.includes($el.getAttribute('data-id'))) {
                         let name = document.querySelector('a[href="#edit-title"]').innerText;
                         if (name.split(' - ').length > 1) {
                             name = name.split(' - ').slice(1).join(' - ');
