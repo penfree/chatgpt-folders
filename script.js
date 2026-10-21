@@ -1,10 +1,20 @@
 class Extension {
     constructor() {
         this.projects = [];
+        this.rawProjects = [];
+        this.apiFresh = false;
+        this.moveInProgress = false;
+        this.dragPath = null;
         this.access_token = null;
         this.$div = null;
         this.observer_active = true;
-        this.collapsedFolders = new Set();
+        try {
+            this.collapsedFolders = new Set(
+                JSON.parse(sessionStorage.getItem('chatgpt-folders-collapsed') || '[]')
+            );
+        } catch {
+            this.collapsedFolders = new Set();
+        }
         this.folderSectionExpanded = true;
     }
 
@@ -99,170 +109,238 @@ class Extension {
     }
 
     loadProjectsFromCache() {
-        if (localStorage.getItem('projects') !== null) {
-            this.projects = JSON.parse(localStorage.getItem('projects'));
+        try {
+            const raw = JSON.parse(localStorage.getItem('chatgpt-folders-raw-v2') || '[]');
+            if (Array.isArray(raw) && raw.length) {
+                this.rawProjects = raw;
+                this.projects = FolderModel.build(raw);
+                return;
+            }
+            // Backward compatibility with the original extension's display cache.
+            const legacy = JSON.parse(localStorage.getItem('projects') || '[]');
+            if (Array.isArray(legacy)) this.projects = legacy;
+        } catch (error) {
+            console.warn('[ChatGPT folders] Ignoring invalid local cache:', error);
         }
     }
 
     storeProjectsInCache() {
-        localStorage.setItem('projects', JSON.stringify(this.projects));
+        if (this.apiFresh) {
+            localStorage.setItem('chatgpt-folders-raw-v2', JSON.stringify(this.rawProjects));
+        }
     }
 
     async fetchProjects() {
-        //console.log('fetchProjects(): START');
-        const previousProjects = this.projects;
+        const previousRaw = this.rawProjects;
+        const previousTree = this.projects;
         try {
-        this.projects = [];
-        let cursor = null;
-        while (true) {
-            let url = 'https://chatgpt.com/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=10';
-            if (cursor !== null) {
-                url += '&cursor=' + cursor;
-            }
-            url += '&t=' + Date.now();
-            let response = await new Promise((resolve, reject) => {
-                //console.log(url);
-                chrome.runtime.sendMessage(
-                    {
+            const records = [];
+            let cursor = null;
+            const seen = new Set();
+            for (let page = 0; page < 100; page += 1) {
+                const url = new URL('https://chatgpt.com/backend-api/gizmos/snorlax/sidebar');
+                url.searchParams.set('conversations_per_gizmo', '0');
+                if (cursor !== null) url.searchParams.set('cursor', cursor);
+                url.searchParams.set('t', Date.now().toString());
+
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
                         action: 'fetch',
                         data: {
-                            url: url,
+                            url: url.href,
                             args: {
-                                method: 'GET',
-                                cache: 'no-store',
-                                headers: {
-                                    Authorization: 'Bearer ' + this.access_token,
-                                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                                    Pragma: 'no-cache',
-                                    Expires: '0'
-                                }
+                                method: 'GET', cache: 'no-store',
+                                headers: { Authorization: 'Bearer ' + this.access_token }
                             }
                         }
-                    },
-                    response => {
-                        resolve(response);
-                    }
-                );
-            });
-            if (!response || !Array.isArray(response.items)) {
-                throw new Error('Unexpected Project API response');
-            }
-            if (response.items.length > 0) {
-                for (let items__value of response.items) {
-                    //console.log(items__value);
-                    let id = items__value.gizmo.gizmo.short_url,
-                        name = items__value.gizmo.gizmo.display.name,
-                        url = 'https://chatgpt.com/g/' + items__value.gizmo.gizmo.short_url + '/project',
-                        level = 0;
-                    if (id.split('-').length > 3) {
-                        id = id.split('-').slice(0, 3).join('-');
-                    }
-                    if (name.split(' - ').length > 1) {
-                        level = name.split(' - ').length - 1;
-                    }
-                    this.projects.push({
-                        id: id,
-                        name: name,
-                        url: url,
-                        level: level,
-                        count: items__value.conversations.items.length,
-                        icon: '📁',
-                        type: 'project',
-                        done: name.toLowerCase().includes('done') || name.toLowerCase().includes('erledigt')
+                    }, response => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(response);
+                    });
+                });
+                if (!response || !Array.isArray(response.items)) {
+                    throw new Error('Project API returned an unexpected response');
+                }
+                for (const item of response.items) {
+                    const gizmo = item?.gizmo?.gizmo || item?.gizmo;
+                    const id = gizmo?.id;
+                    const shortUrl = gizmo?.short_url || id;
+                    const name = gizmo?.display?.name;
+                    if (!/^g-p-[a-zA-Z0-9-]+$/.test(id || '') ||
+                        typeof name !== 'string' || !name.trim() || seen.has(id)) continue;
+                    seen.add(id);
+                    records.push({
+                        id, name,
+                        url: 'https://chatgpt.com/g/' + encodeURIComponent(shortUrl) + '/project',
+                        count: item?.conversations?.items?.length || 0,
+                        done: /done|erledigt/i.test(name)
                     });
                 }
-            }
-            if (response.cursor !== null) {
-                cursor = response.cursor;
-            } else {
-                break;
-            }
-        }
-        // sort projects by name
-        this.projects.sort((a, b) => {
-            let name_a = a.name,
-                name_b = b.name,
-                done_a = a.done,
-                done_b = b.done,
-                unsorted_a = a.name.toLowerCase().includes('ungeordnet'),
-                unsorted_b = b.name.toLowerCase().includes('ungeordnet');
-            if (done_a && !done_b) {
-                return 1;
-            }
-            if (!done_a && done_b) {
-                return -1;
-            }
-            if (unsorted_a && !unsorted_b) {
-                return 1;
-            }
-            if (!unsorted_a && unsorted_b) {
-                return -1;
-            }
-            return name_a.localeCompare(name_b, undefined, {
-                numeric: true,
-                sensitivity: 'base'
-            });
-        });
-        // insert headings
-        let projects_with_headings = [],
-            projects_with_headings_orig = this.projects,
-            last_heading = null,
-            this_heading = null,
-            max_levels = 0;
-        for (let projects__value of projects_with_headings_orig) {
-            if (projects__value.name.split(' - ').length - 1 > max_levels) {
-                max_levels = projects__value.name.split(' - ').length - 1;
-            }
-        }
-        //console.log('max_levels: ' + max_levels);
-        for (let i = 0; i <= max_levels; i++) {
-            projects_with_headings = [];
-            last_heading = null;
-            this_heading = null;
-            for (let projects__value of projects_with_headings_orig) {
-                if (projects__value.name.split(' - ').length > 1) {
-                    this_heading = projects__value.name.split(' - ')[0];
-                    if (last_heading !== this_heading) {
-                        last_heading = this_heading;
-                        projects_with_headings.push({
-                            id: null,
-                            name: this_heading,
-                            url: '#',
-                            level: i,
-                            count: 0,
-                            icon: '📦',
-                            type: 'heading',
-                            done: projects__value.done
-                        });
-                    }
-                    if (projects__value.name.split(' - ').length > 1) {
-                        projects__value.name = projects__value.name.split(' - ').slice(1).join(' - ');
-                    }
+                if (response.cursor === null || response.cursor === undefined) {
+                    cursor = null;
+                    break;
                 }
-                projects_with_headings.push(projects__value);
+                if (response.cursor === cursor) throw new Error('Repeated Project API cursor');
+                cursor = String(response.cursor);
+                if (page === 99) throw new Error('Project listing exceeded pagination limit');
             }
-            projects_with_headings_orig = projects_with_headings;
-            //console.log(projects_with_headings);
-            //console.log(this.projects);
-        }
-        //console.log(this.projects);
-        this.projects = projects_with_headings;
-
-        // modify done
-        for (let projects__value of this.projects) {
-            if (projects__value.done) {
-                if (projects__value.type === 'heading') {
-                    projects__value.icon = '✅';
-                }
-            }
-        }
-
-        //console.log(this.projects);
+            this.rawProjects = records;
+            this.projects = FolderModel.build(records);
+            this.apiFresh = true;
         } catch (error) {
-            this.projects = previousProjects;
-            console.warn('[ChatGPT folders] Unable to refresh projects; using cached data.', error);
+            this.rawProjects = previousRaw;
+            this.projects = previousTree;
+            this.apiFresh = false;
+            console.warn('[ChatGPT folders] Refresh failed; showing cached Projects:', error);
         }
     }
+
+    saveCollapsedState() {
+        sessionStorage.setItem(
+            'chatgpt-folders-collapsed', JSON.stringify([...this.collapsedFolders])
+        );
+    }
+
+    // Dragging changes native Project titles; we never persist a folder mapping.
+    async projectRequest(method, path, body = undefined) {
+        return new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+                action: 'projectRequest',
+                method, path, body, token: this.access_token
+            }, result => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else if (!result || !result.ok) {
+                    reject(new Error('Project API ' + method + ' ' + path +
+                        ': HTTP ' + (result?.status ?? '?') +
+                        (result?.error ? ' ' + result.error : '')));
+                } else {
+                    resolve(result.data);
+                }
+            });
+        });
+    }
+
+    async getProjectDetails(id) {
+        const result = await this.projectRequest('GET',
+            '/backend-api/gizmos/' + encodeURIComponent(id));
+        const detail = result?.gizmo?.gizmo || result?.gizmo || result;
+        if (!detail || typeof detail.display?.name !== 'string') {
+            throw new Error('Project details are incomplete: ' + id);
+        }
+        return detail;
+    }
+
+    async renameProject(id, expectedName, newName) {
+        const current = await this.getProjectDetails(id);
+        if (current.display.name !== expectedName) {
+            throw new Error('项目名称已被其他窗口更改：' + expectedName);
+        }
+        const body = {
+            name: newName,
+            instructions: current.instructions || '',
+            emoji: current.display.emoji ?? null,
+            theme: current.display.theme ?? null
+        };
+        await this.projectRequest('PATCH',
+            '/backend-api/projects/' + encodeURIComponent(id), body);
+    }
+
+    async moveFolder(sourcePath, targetPath) {
+        if (this.moveInProgress) return;
+        if (!this.apiFresh) {
+            window.alert('项目列表尚未完成同步，无法安全地批量重命名。请刷新后重试。');
+            return;
+        }
+        let plan;
+        try {
+            plan = FolderModel.planMove(this.rawProjects, sourcePath, targetPath);
+        } catch (error) {
+            window.alert(error.message);
+            return;
+        }
+        const sample = plan.changes.slice(0, 3)
+            .map(c => c.oldName + ' → ' + c.newName).join('\n');
+        if (!window.confirm(
+            '移动目录：' + plan.source + ' → ' + plan.destination + '\n' +
+            '将重命名 ' + plan.changes.length + ' 个 ChatGPT 项目：\n' +
+            sample + (plan.changes.length > 3 ? '\n…' : '') +
+            '\n\n这些更改将同步到你的其他设备。是否继续？'
+        )) return;
+
+        this.moveInProgress = true;
+        this.dragPath = null;
+        const updated = [];
+        let rollbackFailed = 0;
+        try {
+            for (const change of plan.changes) {
+                await this.renameProject(change.id, change.oldName, change.newName);
+                updated.push(change);
+            }
+            this.collapsedFolders.delete(plan.destination);
+            this.saveCollapsedState();
+            window.alert('移动成功，已更新 ' + updated.length + ' 个项目。');
+        } catch (error) {
+            console.error('[ChatGPT folders] Batch rename failed:', error);
+            // Roll back already applied operations in reverse order.
+            for (const change of updated.reverse()) {
+                try {
+                    await this.renameProject(change.id, change.newName, change.oldName);
+                } catch (rollbackError) {
+                    rollbackFailed += 1;
+                    console.error('[ChatGPT folders] Rollback failed:', rollbackError);
+                }
+            }
+            window.alert('目录移动失败：' + error.message +
+                (rollbackFailed ? '\n有 ' + rollbackFailed +
+                ' 个项目回滚失败，请到原生“项目”列表核对名称。'
+                    : '\n已经尝试回滚所有已成功更新的项目。'));
+        } finally {
+            // Always re-sync from the server, even if rollback was incomplete.
+            await this.fetchProjects();
+            this.storeProjectsInCache();
+            this.moveInProgress = false;
+            await this.injectProjects();
+            this.updateActiveStates();
+        }
+    }
+
+    bindDropTarget(element, targetPath) {
+        const valid = () => {
+            if (!this.dragPath || this.moveInProgress || !this.apiFresh) return false;
+            try {
+                FolderModel.planMove(this.rawProjects, this.dragPath, targetPath);
+                return true;
+            } catch {
+                return false;
+            }
+        };
+        element.addEventListener('dragover', event => {
+            if (!valid()) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'move';
+            element.classList.add('projects-container__drop-target');
+        });
+        element.addEventListener('dragleave', event => {
+            if (!element.contains(event.relatedTarget)) {
+                element.classList.remove('projects-container__drop-target');
+            }
+        });
+        element.addEventListener('drop', event => {
+            if (!valid()) return;
+            event.preventDefault();
+            event.stopPropagation();
+            element.classList.remove('projects-container__drop-target');
+            const source = this.dragPath;
+            this.dragPath = null;
+            this.moveFolder(source, targetPath).catch(err =>
+                console.error('[ChatGPT folders] Move failed:', err)
+            );
+        });
+    }
+
+    
 
     // Insert a standalone "项目目录" category next to the native Projects
     // heading. Never put our entire panel at the top of the global sidebar.
